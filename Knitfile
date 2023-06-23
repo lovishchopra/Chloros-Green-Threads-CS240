@@ -1,0 +1,37 @@
+local knit = require("knit")
+
+local cc := gcc
+local as := as
+
+local cflags := -std=gnu11 -Wall -O2 -fno-strict-aliasing -g3
+
+local name = knit.shell("whoami")
+
+if cli.SAN then
+    cflags := $cflags -fsanitize=address,undefined,leak
+end
+
+return b{
+    $ all: test1 example test_extra_credit
+
+    $ test: test1
+        ./test1
+    $ test1: chloros.o swtch.o test1.o
+        $cc $cflags $input -o $output
+    $ example: chloros.o swtch.o example.o
+        $cc $cflags $input -o $output
+    $ test_extra_credit: chloros.o swtch.o test_extra_credit.o
+        $cc $cflags $input -o $output
+    $ %.o:D[.dep/%.d]: %.c
+        $cc $cflags -MMD -MF $dep -c $input -o $output
+    $ %.o: %.S
+        $as $input -o $output
+    $ clean:VB:
+        knit -t clean
+        rm -f *.tar.gz
+    $ format:VB:
+        clang-format -i *.c *.h
+    $ submit:VB: clean
+        tar -czf /tmp/lab1-$name.tar.gz .
+        mv /tmp/lab1-$name.tar.gz .
+}

@@ -1,0 +1,193 @@
+CS240: Advanced Topics in Operating Systems: Lab 1
+Cooperative User Level Threads Library: Chloros
+Lovish Chopra
+lovish@stanford.edu
+Extra Credit
+==========
+| Report |
+==========
+For extra credit, I implemented a preemptive threads version (second extra credit option) in addition to the current code after completing the original thread implementation. I believe that one good part is that I got my extra credit implementation running without using any methods like swapcontext. I used the normal ctxswitch in order to run the preemptive threads too.
+Here are some basic steps that I have taken to implement the same:
+
+1. I have added a method in the user interface (register_alarm) to register a handler for SIGALRM and set an alarm. Few implementation points and reasonings:
+    a. [DESIGN CHOICE 1]: For the signal handler, I used sigaction to register it. I also set the signal handler flag to SA_NODEFER. Doing this will help us avoid the use of siglongjmp and sigsetjmp, which have a much more complex implementation and are more likely to have a bunch of corner cases, whereas this implementation works very easily. In a general case, once we enter a signal handler for a signal, the future signals for the same do not invoke the handler as long as the handler is in the stack i.e. the future calls to the handlers are 'blocked'. Using SA_NODEFER allows the signal handler to be invoked in a non-blocking way. This allows ease in context switching. The signal handler simply calls thread_yield to yield the thread.
+
+    b. [DESIGN CHOICE 2]: We register an alarm using ualarm, but one interesting thing here is the parameters that are used for the ualarm are different from the general case:
+      b.1 In a general case, one could do something like ualarm(alarm_rate, alarm_rate) for basically raising a SIGALRM every alarm_rate microseconds regardless of whether a user-level thread voluntarily yields the CPU or not. This does not seem like a wise solution. For example: let's say that rate is 50 microseconds. Suppose there are two threads t1 and t2. t1 runs for 47 microseconds and then voluntarily yields, after which a context switch happens and t2 is about to run, but the alarm is raised and the execution will switch back to t1. This will virtually 'starve' t2.
+
+      b.2 What we want is that when a thread runs, within a given number of microseconds, either the thread yields voluntarily, or we preempt the thread. In the above example, we would want t2 to get its share of 50 microseconds before it is preempted, otherwise it could potentially starve if t1 always does close to 50 microseconds of work befre yielding voluntarily. This means that we want that whenever we context switch to a new user-level thread, the alarm should be reset to occur within 50 microseconds of the switch, not within 50 microseconds of the last time an alarm rang. Hence, as a design choice, what we do here is that whenever a scheduling decision is made, just before the context switch, we reset the alarm using ualarm(alarm_rate, 0) so that the next alarm takes place 'alarm_rate' number of microseconds from then. As soon as we set the alarm, we context switch to the new thread and start running it. This has three main benefits: it simplifies the design of the system, it makes the preemptive system easier to integrate with the original non-preemptive system, and it ensures that user-level threads don't starve.
+
+
+2. At every spawn of the thread and thread yield call, we remove the alarm using ualarm(0, 0) because that is the 'scheduling' phase of the system. The threads do not need to be and are not supposed to be preempted during that part of the execution of code. Preemption occurs only when a scheduling decision is made, a thread is actually running and doing thread-related work.
+
+3. Just to demonstrate when a thread yields using preemption vs when it yields voluntarily, I have added a print statement in the signal handler. This will obviously not be there in a production user-level threads library but it only depicts how the system will run.
+
+4. In a non-premptive case, the alarm_rate is set to 0 automatically, so the same code for preemptive case works well here without any modifications.
+
+==========
+| Script |
+==========
+I have added a small script test_extra_credit.c to demonstrate the effects of testing using preemption. Here, I set an alarm of 30 microseconds so that we can see a bunch of preemptions. In this script, every worker simply prints (worker_id, i) for i from 0 to 24. However, in between, when i becomes a multiple of 10 (i.e. after printing 9 and 19), it also yields the CPU voluntarily. This script, henceforth, shows how the library is synchronized in such a way that preemption and non-preemption can work together in harmony.
+
+One sample output obtained (Some note about the output: You could possibly see (like in line 145 and 166) that part of the print statement was printed in line 145, but then SIGALRM preempted it and the rest of it was printed in line 166. This is obviously a race issue at user application-level that the compiler divided the print statement into blocks. The thread library cannot and should not handle it anyway):
+(1 0)
+SIGALRM causing preemption.
+(2 0)
+(2 1)
+(2 2)
+(2 3)
+(2 4)
+(2 4)
+SIGALRM causing preemption.
+(1 1)
+(1 2)
+(1 3)
+(1 4)
+(1 5)
+(1 6)
+(1 7)
+(1 8)
+(1 9)
+(1 10)
+(1 11)
+(1 12)
+(1 12)
+SIGALRM causing preemption.
+(3 0)
+(3 1)
+(3 2)
+(3 3)
+(3 4)
+(3 5)
+(3 6)
+(3 7)
+(3 8)
+(3 9)
+(3 10)
+(3 11)
+(3 12)
+(3 13)
+(3 14)
+Thread 3 yielding voluntarily
+(2 5)
+(2 6)
+(2 7)
+(2 8)
+(2 9)
+(2 10)
+(2 11)
+(2 12)
+(2 13)
+(2 14)
+Thread 2 yielding voluntarily
+(1 13)
+(1 14)
+Thread 1 yielding voluntarily
+(4 0)
+(4 1)
+(4 2)
+(4 3)
+(4 4)
+(4 5)
+(4 6)
+(4 7)
+(4 8)
+(4 9)
+(4 10)
+(4 11)
+(4 12)
+(4 13)
+(4 14)
+Thread 4 yielding voluntarily
+(3 15)
+(3 16)
+(3 17)
+(3 18)
+(3 19)
+(3 20)
+(3 21)
+(3 22)
+(3 23)
+(3 24)
+(3 25)
+(3 26)
+(3 27)
+(3 28)
+(3 29)
+Thread 3 yielding voluntarily
+(2 15)
+(2 16)
+(2 17)
+(2 18)
+(2 19)
+(2 20)
+(2 21)
+(2 22)
+(2 23)
+(2 24)
+(2 25)
+(2 26)
+(2 27)
+(2 28)
+(2 28)
+SIGALRM causing preemption.
+(1 15)
+(1 16)
+(1 17)
+(1 18)
+(1 19)
+(1 20)
+(1 21)
+(1 22)
+(1 23)
+(1 24)
+(1 25)
+(1 SIGALRM causing preemption.
+(4 15)
+(4 16)
+(4 17)
+(4 18)
+(4 19)
+(4 20)
+(4 21)
+(4 22)
+(4 23)
+(4 24)
+(4 25)
+SIGALRM causing preemption.
+(3 30)
+(3 31)
+(3 32)
+(3 33)
+(3 34)
+Thread 3 ending operation.
+(2 29)
+Thread 2 yielding voluntarily
+26)
+(1 27)
+(1 28)
+(1 29)
+Thread 1 yielding voluntarily
+(4 26)
+(4 27)
+(4 28)
+(4 29)
+Thread 4 yielding voluntarily
+(2 30)
+(2 31)
+(2 32)
+(2 33)
+(2 34)
+Thread 2 ending operation.
+(1 30)
+(1 31)
+(1 32)
+(1 33)
+(1 34)
+Thread 1 ending operation.
+(4 30)
+(4 31)
+(4 32)
+(4 33)
+(4 34)
+Thread 4 ending operation.
